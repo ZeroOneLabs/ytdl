@@ -1,0 +1,102 @@
+#!/bin/bash
+add_date=false
+high_quality=false
+music=false
+
+USAGE='''
+ytdl [options] [url]
+NAME
+    ytdl - A script that uses quick args to download media files (that you own) from websites that allow you to do so.
+
+
+SYNOPSIS
+    ytdl [-nmdhU] [-u URL]
+
+    -n | --name             Quoted string of the name of the output file.
+
+    -u | --url              [Quoted] string of the URL that you would like to download a file from.
+
+    -h | --high-quality     Download the highest quality of audio/video.
+
+    -m | --music            Download only the highest quality audio from the URL.
+
+    -d | --date             Append the current date (yyyy-mm-dd) to the file name.
+
+    -U | --update           Update yt-dlp.
+'''
+
+if [ ! $(which yt-dlp) ];then
+    echo "'yt-dlp' not installed or not in PATH."
+    exit 1
+fi
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    -n|--name)
+        the_name="$2"
+        shift # past argument
+        shift # past value
+        ;;
+    -u|--url)
+        the_url="$2"
+        shift # past argument
+        shift # past value
+        ;;
+    -h|--high-quality)
+        high_quality=true
+        shift # past argument
+        ;;
+    -m|--music)
+        music=true
+        shift
+        ;;
+    -d|--date)
+        add_date=true
+        shift
+        ;;
+    -U|--update)
+        yt-dlp -U
+        shift
+        ;;
+    -*|--*)
+        echo "Unknown option $1"
+        echo $USAGE
+        exit 1
+        ;;
+    *)
+        echo $USAGE
+        ;;
+    esac
+done
+
+date_append=""
+if $add_date;then
+    date_append=" $(date +'%Y-%m-%d')"
+fi
+
+quality_text=""
+if $high_quality;then
+    quality_text="--format 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'"
+fi
+if $music;then
+    quality_text="--extract-audio -f ba --format-sort wav,aac,m4a"
+fi
+
+if [[ -z $the_url ]];then
+    echo "No URL was provided"
+    echo $USAGE
+    exit 1
+fi
+
+if [[ ! -z $the_name ]] && [[ ! -z $date_append ]];then
+    yt-dlp ${quality_text} "${the_url}" -o "${the_name}${date_append}.%(ext)s"
+elif [[ -z $the_name ]] && [[ ! -z $date_append ]];then
+    # If no name specified but date flag yes, append date to original title
+    yt-dlp ${quality_text} "${the_url}" -o "%(title)s${date_append}.%(ext)s"
+elif [[ ! -z $the_name ]] && [[ -z $date_append ]];then
+    # If name specified but not date flag, only append name
+    yt-dlp ${quality_text} "${the_url}" -o "${the_name}.%(ext)s"
+else
+    yt-dlp ${quality_text} "${the_url}"
+fi
+
