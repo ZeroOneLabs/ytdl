@@ -1,7 +1,14 @@
-#!/bin/bash
+#!/usr/bin/env bash
+
+set -euo pipefail
+
 add_date=false
 high_quality=false
 music=false
+trim_start=""
+trim_end=""
+do_trim=false
+the_name=""
 
 USAGE='''
 ytdl [options] [url]
@@ -16,6 +23,10 @@ SYNOPSIS
 
     -u | --url              [Quoted] string of the URL that you would like to download a file from.
 
+    -t, --trim [START] [END]        Trim video/audio using ffmpeg (e.g. 123, 12:34, 01:23:45.678, or 1h23m45s)
+        --trim-start TIME           Start trim at TIME
+        --trim-end TIME             End trim at TIME (requires --trim-start if used alone)
+
     -h | --high-quality     Download the highest quality of audio/video.
 
     -m | --music            Download only the highest quality audio from the URL.
@@ -24,79 +35,137 @@ SYNOPSIS
 
     -U | --update           Update yt-dlp.
 '''
+# Dependencies
+for cmd in yt-dlp ffmpeg; do
+    command -v "$cmd" >/dev/null || { echo "Error: $cmd is required" >&2; exit 1; }
+done
 
-if [ ! $(which yt-dlp) ];then
-    echo "'yt-dlp' not installed or not in PATH."
-    exit 1
-fi
-
+# Parse arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-    -n|--name)
-        the_name="$2"
-        shift # past argument
-        shift # past value
-        ;;
-    -u|--url)
-        the_url="$2"
-        shift # past argument
-        shift # past value
-        ;;
-    -h|--high-quality)
-        high_quality=true
-        shift # past argument
-        ;;
-    -m|--music)
-        music=true
-        shift
-        ;;
-    -d|--date)
-        add_date=true
-        shift
-        ;;
-    -U|--update)
-        yt-dlp -U
-        shift
-        ;;
-    -*|--*)
-        echo "Unknown option $1"
-        echo $USAGE
-        exit 1
-        ;;
-    *)
-        echo $USAGE
-        ;;
+        -u|--url)
+            [[ -z "${2:-}" || "$2" =~ ^- ]] && { echo "Error: --url requires an argument"; echo "$USAGE"; exit 1; }
+            URL="$2"; shift 2 ;;
+        -n|--name)
+            the_name="$2"; shift 2 ;;
+        -t|--trim)
+            do_trim=true
+            trim_start="${2:-}"
+            trim_end="${3:-}"
+
+            # Error if no timestamps provided
+            if [[ -z "$trim_start" && -z "$trim_end" ]]; then
+                echo "Error: --trim requires at least one timestamp" >&2
+                echo "$USAGE"
+                exit 1
+            fi
+
+            # Shift correctly based on how many arguments were consumed
+            if [[ -n "$trim_end" ]]; then
+                shift 3
+            elif [[ -n "$trim_start" ]]; then
+                shift 2
+            else
+                shift 1
+            fi
+            ;;
+
+        --trim-start)
+            do_trim=true; trim_start="$2"; shift 2 ;;
+        --trim-end)
+            do_trim=true; trim_end="$2"; shift 2 ;;
+        -h|--high-quality) high_quality=true; shift ;;
+        -m|--music)        music=true;       shift ;;
+        -d|--date)         add_date=true;    shift ;;
+        -U|--update)       yt-dlp -U; exit 0 ;;
+        --help)            echo "$USAGE"; exit 0 ;;
+        *) echo "Unknown option: $1"; echo "$USAGE"; exit 1 ;;
     esac
 done
 
-date_append=""
-if $add_date;then
-    date_append=" $(date +'%Y-%m-%d')"
+[[ -z "$URL" ]] && { echo "Error: No URL provided"; echo "$USAGE"; exit 1; }
+[[ "$URL" != http* ]] && { echo "Error: URL must start with http:// or https://"; exit 1; }
+
+# Quality options
+quality_options=""
+if $music; then
+    quality_options="--extract-audio --audio-format best --audio-quality 0"
+elif $high_quality; then
+    quality_options="-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
 fi
 
-quality_text=""
-if $high_quality;then
-    quality_text="--format 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'"
-fi
-if $music;then
-    quality_text="--extract-audio -f ba --format-sort wav,aac,m4a"
-fi
+# Date suffix
+date_suffix=""
+$add_date && date_suffix=" $(date +'%Y-%m-%d')"
 
-if [[ -z $the_url ]];then
-    echo "No URL was provided"
-    echo $USAGE
+# Final output template
+output_template="%(title)s.%(ext)s"
+[[ -n "$the_name" ]] && output_template="${the_name}${date_suffix}.%(ext)s"
+[[ -z "$the_name" && -n "$date_suffix" ]] && output_template="%(title)s${date_suffix}.%(ext)s"
+
+# === Portable temporary file (works on macOS + Linux) ===
+# tmp_base=$(mktemp -u)
+# tmp_pattern="${tmp_base}.XXXXXX"
+tmp_dir=$(mktemp -d -t "$(basename $0).XXXXXXXXXX")
+# trap 'rm -f "${tmp_base}"* 2>/dev/null || true' EXIT
+trap 'rm -rf "$tmp_dir"' EXIT
+
+echo "Downloading..."
+yt-dlp $quality_options -o "${tmp_dir}/${output_template}" "${URL}"
+
+downloaded_file=$(find "$tmp_dir" -type f | head -n1)
+
+
+
+if [[ -z "$downloaded_file" || ! -f "$downloaded_file" ]]; then
+    echo "Error: Download failed — no file found in $tmp_dir" >&2
+    echo "Listingn contents of tmp_dir:"
+    ls -la "$tmp_dir" >&2
     exit 1
 fi
 
-if [[ ! -z $the_name ]] && [[ ! -z $date_append ]];then
-    yt-dlp ${quality_text} "${the_url}" -o "${the_name}${date_append}.%(ext)s"
-elif [[ -z $the_name ]] && [[ ! -z $date_append ]];then
-    # If no name specified but date flag yes, append date to original title
-    yt-dlp ${quality_text} "${the_url}" -o "%(title)s${date_append}.%(ext)s"
-elif [[ ! -z $the_name ]] && [[ -z $date_append ]];then
-    # If name specified but not date flag, only append name
-    yt-dlp ${quality_text} "${the_url}" -o "${the_name}.%(ext)s"
+
+file_extension="${downloaded_file##*.}"
+file_extension="${downloaded_file##*.}"
+
+# Build the desired final filename
+if [[ -n "$the_name" ]]; then
+    base_name="${the_name}${date_suffix}"
 else
-    yt-dlp ${quality_text} "${the_url}"
+    # Fall back to original title (extract from downloaded filename, remove temp path and extension)
+    base_name="${filename%."${file_extension}"}"  # removes .webm, .mp4, etc.
+    [[ -n "$date_suffix" ]] && base_name+="${date_suffix}"
 fi
 
+final_filename="${base_name}.${file_extension}"
+final_path="./${final_filename}"
+
+echo "Downloaded: $downloaded_file"
+echo "Saving as: $final_path"
+
+# If no trimming needed, just move the file
+if ! $do_trim; then
+    mv "${downloaded_file}" "${final_path}"
+    echo "Saved: ${final_path}"
+    exit 0
+fi
+
+# Otherwise, trim with ffmpeg
+echo "Trimming with ffmpeg..."
+ffmpeg_args=("-y" "-i" "${downloaded_file}")
+
+[[ -n "${trim_start}" ]] && ffmpeg_args+=("-ss" "${trim_start}")
+[[ -n "${trim_end}" ]] && ffmpeg_args+=("-to" "${trim_end}")
+
+# Use stream copy if only starting point given (fast, lossless)
+if [[ -n "${trim_start}" && -z "${trim_end}" ]]; then
+    ffmpeg_args+=("-c" "copy")
+else
+    ffmpeg_args+=("-c:v" "libx264" "-preset" "fast" "-c:a" "aac")
+fi
+
+ffmpeg_args+=("${final_path}")
+
+ffmpeg "${ffmpeg_args[@]}" </dev/null
+
+echo "Trimmed file saved: ${final_path}"
