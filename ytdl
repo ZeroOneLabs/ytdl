@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+# Un-comment for testing
+# set -euo pipefail
 
 add_date=false
 high_quality=false
