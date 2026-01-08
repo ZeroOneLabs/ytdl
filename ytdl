@@ -127,19 +127,17 @@ fi
 
 
 file_extension="${downloaded_file##*.}"
-file_extension="${downloaded_file##*.}"
 
 # Build the desired final filename
 if [[ -n "$the_name" ]]; then
     base_name="${the_name}${date_suffix}"
 else
-    # Fall back to original title (extract from downloaded filename, remove temp path and extension)
-    base_name="${filename%."${file_extension}"}"  # removes .webm, .mp4, etc.
+    base_name=$(basename "$downloaded_file" ."$file_extension")
     [[ -n "$date_suffix" ]] && base_name+="${date_suffix}"
 fi
 
 final_filename="${base_name}.${file_extension}"
-final_path="./${final_filename}"
+final_path="${final_filename}"
 
 echo "Downloaded: $downloaded_file"
 echo "Saving as: $final_path"
